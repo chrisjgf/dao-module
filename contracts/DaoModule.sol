@@ -372,6 +372,17 @@ contract DaoModule is AccessControl {
         return string(abi.encodePacked(proposalId, bytes3(0xe2909f), txsHash));
     }
 
+    /// @param proposalId Id of the proposal that proposes to execute the transactions represented by the txHashes
+    /// @param txHashes EIP-712 Hashes of the transactions that should be executed
+    function getQuestionHash(string memory proposalId, bytes32[] memory txHashes)
+        public
+        pure
+        returns (bytes32)
+    {
+        string memory question = buildQuestion(proposalId, txHashes);
+        return keccak256(bytes(question));
+    }
+
     /// @dev Generate the question id.
     /// @notice It is required that this is the same as for the oracle implementation used.
     function getQuestionId(
