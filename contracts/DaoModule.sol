@@ -2,6 +2,7 @@
 pragma solidity >=0.8.0;
 
 import "./interfaces/Realitio.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 
 contract Enum {
     enum Operation { Call, DelegateCall }
@@ -21,7 +22,7 @@ interface Executor {
     ) external returns (bool success);
 }
 
-contract DaoModule {
+contract DaoModule is AccessControl {
     bytes32 public constant INVALIDATED =
         0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
 
@@ -36,6 +37,10 @@ contract DaoModule {
     // keccak256(
     //     "Transaction(address to,uint256 value,bytes data,uint8 operation,uint256 nonce)"
     // );
+
+    bytes32 public constant MEMBER_ROLE =
+        0xffa60083152bd11704a80cc8c7a409dad8aa74288b454a3ba0e94c0abc7cf168;
+    // keccak256("MEMBER");
 
     event ProposalQuestionCreated(bytes32 indexed questionId, string indexed proposalId);
 
@@ -74,6 +79,7 @@ contract DaoModule {
             expiration == 0 || expiration - cooldown >= 60,
             "There need to be at least 60s between end of cooldown and expiration"
         );
+        _setupRole(DEFAULT_ADMIN_ROLE, address(this));
         executor = _executor;
         oracle = _oracle;
         answerExpiration = expiration;
@@ -87,6 +93,43 @@ contract DaoModule {
     modifier executorOnly() {
         require(msg.sender == address(executor), "Not authorized");
         _;
+    }
+
+    /// @dev Restricted to members of the community.
+    modifier onlyMember() {
+        require(isMember(msg.sender), "Restricted to members.");
+        _;
+    }
+
+    /// @dev Return `true` if the `account` belongs to the community.
+    function isMember(address account) public view virtual returns (bool) {
+        return hasRole(MEMBER_ROLE, account);
+    }
+
+    /// @dev Add a member of the community.
+    function addMember(address account) public virtual executorOnly {
+        grantRole(MEMBER_ROLE, account);
+    }
+
+    /// @dev Add members of the community.
+    function addMember(address[] memory accounts) public virtual executorOnly {
+        uint256 len = accounts.length;
+        require(len > 0, "Must provide accounts");
+
+        for (uint256 i = 0; i < len; i++) {
+            address account = accounts[i];
+            grantRole(MEMBER_ROLE, account);
+        }
+    }
+
+    /// @dev Add a member of the community.
+    function removeMember(address account) public virtual executorOnly {
+        grantRole(MEMBER_ROLE, account);
+    }
+
+    /// @dev Remove oneself as a member of the community.
+    function leaveCommunity() public virtual {
+        renounceRole(MEMBER_ROLE, msg.sender);
     }
 
     /// @notice This can only be called by the executor
@@ -147,7 +190,7 @@ contract DaoModule {
     /// @param proposalId Id that should identify the proposal uniquely
     /// @param txHashes EIP-712 hashes of the transactions that should be executed
     /// @notice The nonce used for the question by this function is always 0
-    function addProposal(string memory proposalId, bytes32[] memory txHashes) public {
+    function addProposal(string memory proposalId, bytes32[] memory txHashes) public onlyMember {
         addProposalWithNonce(proposalId, txHashes, 0);
     }
 
@@ -159,7 +202,7 @@ contract DaoModule {
         string memory proposalId,
         bytes32[] memory txHashes,
         uint256 nonce
-    ) public {
+    ) internal {
         // We load some storage variables into memory to save gas
         uint256 templateId = template;
         uint32 timeout = questionTimeout;
@@ -194,10 +237,10 @@ contract DaoModule {
     /// @param proposalId Id that should identify the proposal uniquely
     /// @param txHashes EIP-712 hashes of the transactions that should be executed
     /// @notice This can only be called by the executor
-    function markProposalAsInvalid(string memory proposalId, bytes32[] memory txHashes)
-        public
-    // Executor only is checked in markProposalAsInvalidByHash(bytes32)
-    {
+    function markProposalAsInvalid(
+        string memory proposalId,
+        bytes32[] memory txHashes // Executor only is checked in markProposalAsInvalidByHash(bytes32)
+    ) public {
         string memory question = buildQuestion(proposalId, txHashes);
         bytes32 questionHash = keccak256(bytes(question));
         markProposalAsInvalidByHash(questionHash);
@@ -327,6 +370,17 @@ contract DaoModule {
     {
         string memory txsHash = bytes32ToAsciiString(keccak256(abi.encodePacked(txHashes)));
         return string(abi.encodePacked(proposalId, bytes3(0xe2909f), txsHash));
+    }
+
+    /// @param proposalId Id of the proposal that proposes to execute the transactions represented by the txHashes
+    /// @param txHashes EIP-712 Hashes of the transactions that should be executed
+    function getQuestionHash(string memory proposalId, bytes32[] memory txHashes)
+        public
+        pure
+        returns (bytes32)
+    {
+        string memory question = buildQuestion(proposalId, txHashes);
+        return keccak256(bytes(question));
     }
 
     /// @dev Generate the question id.
